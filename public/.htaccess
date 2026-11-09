@@ -1,0 +1,15 @@
+# Serve SPA + forward /api to PHP
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # API
+  RewriteRule ^api/(.*)$ api/index.php [QSA,L]
+
+  # Don't rewrite real files
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Fallback to index for non-hash deep links if needed
+  RewriteRule ^ index.html [L]
+</IfModule>

@@ -84,8 +84,18 @@ export function Footer() {
 
         <div className="mt-12 flex flex-col items-center justify-between gap-4 border-t border-slate-200 pt-7 text-xs text-slate-500 sm:flex-row">
           <p>
-            © {year} {general.brandName} {general.brandSuffix}. جميع الحقوق محفوظة. ·{" "}
-            <a href="#/login" className="font-semibold text-brand-700 hover:underline">دخول لوحة التحكم</a>
+            © {year} {general.brandName} {general.brandSuffix}. جميع الحقوق محفوظة.
+          </p>
+          <p className="text-center">
+            تم التصميم بواسطة{" "}
+            <a
+              href="https://zeusmediaeg.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-semibold text-brand-700 hover:underline"
+            >
+              zeusmediaeg.com
+            </a>
           </p>
           <p className="max-w-xl text-center sm:text-end">
             خدمة اشتراك مستقلة. زين وموبايلي وSTC وسلام علامات تجارية لمالكيها.

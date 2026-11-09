@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "dev:api": "php -S 127.0.0.1:8080 -t api api/router.php",
+    "build": "vite build && node scripts/copy-api.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

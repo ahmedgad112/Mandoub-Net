@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import { cn } from "@/utils/cn";
-import { subscribe, useSite, lastSavedAt, ensureUsersSeeded, getSessionUserId, getSettings, setSessionUser } from "@/store/siteStore";
+import {
+  subscribe,
+  useSite,
+  lastSavedAt,
+  getSessionUserId,
+  logoutUser,
+  isLoggedIn,
+  SESSION_KEY,
+} from "@/store/siteStore";
+import { getToken } from "@/api/client";
 import { Icons } from "@/components/ui";
 import { Logo } from "@/components/Navbar";
 import { Btn, Card } from "./ui";
-import { LoginPage, SESSION_KEY } from "./LoginPage";
+import { LoginPage } from "./LoginPage";
 import { BackupPanel, FAQPanel, GeneralPanel, HeroPanel, ListsPanel, PackagesPanel, SectionsPanel, TestimonialsPanel } from "./panels/ContentPanels";
 import { SEOPanel, SEOScoreRing } from "./panels/SEOPanel";
 import { UsersPanel } from "./panels/UsersPanel";
@@ -96,7 +105,7 @@ function Overview({ go }: { go: (p: PanelId) => void }) {
 }
 
 export function AdminApp({ forceLogin = false }: { forceLogin?: boolean }) {
-  const [authed, setAuthed] = useState(() => !forceLogin && sessionStorage.getItem(SESSION_KEY) === "1");
+  const [authed, setAuthed] = useState(() => !forceLogin && isLoggedIn() && !!getToken());
   const [panel, setPanel] = useState<PanelId>(() => {
     const part = location.hash.split("/")[2] as PanelId;
     return nav.some((n) => n.id === part) ? part : "overview";
@@ -124,16 +133,12 @@ export function AdminApp({ forceLogin = false }: { forceLogin?: boolean }) {
   useEffect(() => {
     document.title = "لوحة التحكم — مندوب نت";
     document.body.classList.add("admin-body");
-    void (async () => {
-      await ensureUsersSeeded();
-      // جلسات قديمة بلا user id → اربطها بأول مدير نشط
-      if (sessionStorage.getItem(SESSION_KEY) === "1" && !getSessionUserId()) {
-        const adminUser = getSettings().admin.users.find((u) => u.active && u.role === "admin");
-        if (adminUser) setSessionUser(adminUser);
-      }
-    })();
+    if (!getToken()) {
+      sessionStorage.removeItem(SESSION_KEY);
+      setAuthed(false);
+    }
     const unsub = subscribe(() => {
-      if (Date.now() - lastSavedAt < 500) {
+      if (Date.now() - lastSavedAt < 800) {
         setSaved(true);
         setTimeout(() => setSaved(false), 1600);
       }
@@ -210,10 +215,10 @@ export function AdminApp({ forceLogin = false }: { forceLogin?: boolean }) {
               variant="ghost"
               className="!text-slate-600"
               onClick={() => {
-                sessionStorage.removeItem(SESSION_KEY);
-                setSessionUser(null);
-                setAuthed(false);
-                location.hash = "#/login";
+                void logoutUser().finally(() => {
+                  setAuthed(false);
+                  location.hash = "#/login";
+                });
               }}
             >
               خروج

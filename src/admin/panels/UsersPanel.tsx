@@ -1,8 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import {
   createUser,
   deleteUser,
-  ensureUsersSeeded,
   getSessionUser,
   updateUser,
   useSite,
@@ -41,10 +40,6 @@ export function UsersPanel() {
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [msg, setMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    void ensureUsersSeeded();
-  }, []);
 
   const canManage = !me || me.role === "admin";
 
@@ -110,11 +105,11 @@ export function UsersPanel() {
     }
   };
 
-  const onDelete = (u: AdminUser) => {
+  const onDelete = async (u: AdminUser) => {
     if (!canManage) return;
     if (!confirm(`حذف المستخدم «${u.username}» نهائيًا؟`)) return;
     try {
-      deleteUser(u.id);
+      await deleteUser(u.id);
       if (editing?.id === u.id) cancelEdit();
       setMsg({ type: "ok", text: "تم حذف المستخدم" });
     } catch (err) {
@@ -273,8 +268,8 @@ export function UsersPanel() {
         </p>
       )}
 
-      <p className="text-[11px] leading-relaxed text-amber-700/90 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-        ⚠️ الحسابات محفوظة في متصفح هذا الجهاز فقط (موقع ثابت بلا خادم). لنشر الحماية فعليًا على السيرفر تحتاج مصادقة خلفية.
+      <p className="text-[11px] leading-relaxed text-brand-800/90 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3">
+        الحسابات محفوظة في قاعدة البيانات على السيرفر — تشتغل من أي جهاز بعد تسجيل الدخول.
       </p>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { faqs, features, plans, stats, steps, testimonials, type Plan } from "@/data/content";
+import { api, clearAuth, getCachedUser, getToken, setAuth, type ApiUser } from "@/api/client";
 
 /* ---------------- Types ---------------- */
 export type SiteSettings = {
@@ -78,7 +79,8 @@ export type AdminUser = {
   username: string;
   name: string;
   role: AdminRole;
-  passwordHash: string;
+  /** Kept for type compat; hashes live on the server only */
+  passwordHash?: string;
   active: boolean;
   createdAt: string;
 };
@@ -155,14 +157,12 @@ export const defaultSettings: SiteSettings = {
   },
 };
 
-/* ---------------- Persistence ---------------- */
-const KEY = "mandoob:site:v1";
-
+/* ---------------- Persistence (SQLite API) ---------------- */
 function isObj(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
 function deepMerge<T>(base: T, patch: unknown): T {
-  if (!isObj(base) || !isObj(patch)) return (patch === undefined ? base : (patch as T));
+  if (!isObj(base) || !isObj(patch)) return patch === undefined ? base : (patch as T);
   const out: Record<string, unknown> = { ...(base as Record<string, unknown>) };
   for (const k of Object.keys(patch)) {
     const b = (base as Record<string, unknown>)[k];
@@ -172,37 +172,66 @@ function deepMerge<T>(base: T, patch: unknown): T {
   return out as T;
 }
 
-function load(): SiteSettings {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return defaultSettings;
-    return deepMerge(defaultSettings, JSON.parse(raw));
-  } catch {
-    return defaultSettings;
-  }
+function contentOnly(s: SiteSettings) {
+  const { admin: _admin, ...rest } = s;
+  return rest;
 }
 
-let state: SiteSettings = load();
+function toAdminUser(u: ApiUser): AdminUser {
+  return {
+    id: u.id,
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    active: u.active,
+    createdAt: u.createdAt,
+  };
+}
+
+let state: SiteSettings = structuredClone(defaultSettings);
+let bootstrapped = false;
+let bootPromise: Promise<void> | null = null;
 const listeners = new Set<() => void>();
 let saveTimer: number | undefined;
+let suppressPersist = false;
+
+export let lastSavedAt = 0;
+export let loadError: string | null = null;
+export let isHydrating = true;
 
 function emit() {
   listeners.forEach((l) => l());
 }
-function persist() {
-  window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-      lastSavedAt = Date.now();
-      emit();
-    } catch {
-      /* quota exceeded — ignore */
-    }
-  }, 250);
+
+function applyRemoteSettings(remote: Record<string, unknown>, users?: ApiUser[]) {
+  suppressPersist = true;
+  state = deepMerge(structuredClone(defaultSettings), remote);
+  state = {
+    ...state,
+    admin: {
+      passwordHash: "",
+      users: users ? users.map(toAdminUser) : state.admin.users ?? [],
+    },
+  };
+  suppressPersist = false;
+  emit();
 }
 
-export let lastSavedAt = 0;
+function persist() {
+  if (suppressPersist || !bootstrapped) return;
+  window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    void (async () => {
+      try {
+        await api.saveSettings(contentOnly(state));
+        lastSavedAt = Date.now();
+        emit();
+      } catch {
+        /* network — UI keeps local draft until next successful save */
+      }
+    })();
+  }, 450);
+}
 
 export function getSettings() {
   return state;
@@ -222,19 +251,65 @@ export function patch<K extends keyof SiteSettings>(key: K, value: Partial<SiteS
     [key]: Array.isArray(value) ? value : isObj(s[key]) && isObj(value) ? { ...(s[key] as object), ...(value as object) } : value,
   }));
 }
-export function resetSettings() {
-  state = defaultSettings;
-  localStorage.removeItem(KEY);
+
+export async function resetSettings() {
+  const res = await api.resetSettings();
+  applyRemoteSettings(res.settings, state.admin.users as unknown as ApiUser[]);
+  lastSavedAt = Date.now();
   emit();
 }
-export function importSettings(json: string) {
-  const parsed = JSON.parse(json);
-  state = deepMerge(defaultSettings, parsed);
-  emit();
-  persist();
-}
+
 export function exportSettings() {
-  return JSON.stringify(state, null, 2);
+  return JSON.stringify(contentOnly(state), null, 2);
+}
+
+export async function importSettings(json: string) {
+  const parsed = JSON.parse(json);
+  const merged = deepMerge(structuredClone(defaultSettings), parsed);
+  await api.saveSettings(contentOnly(merged));
+  applyRemoteSettings(contentOnly(merged) as unknown as Record<string, unknown>, undefined);
+  await refreshUsers();
+  lastSavedAt = Date.now();
+}
+
+export async function bootstrapStore() {
+  if (bootPromise) return bootPromise;
+  bootPromise = (async () => {
+    isHydrating = true;
+    loadError = null;
+    emit();
+    try {
+      const res = await api.getSettings();
+      let users: ApiUser[] = [];
+      if (getToken()) {
+        try {
+          const me = await api.me();
+          setAuth(getToken(), me.user);
+          sessionStorage.setItem(SESSION_KEY, "1");
+          setSessionUser(toAdminUser(me.user));
+          if (me.user.role === "admin") {
+            const listed = await api.listUsers();
+            users = listed.users;
+          } else {
+            users = [me.user];
+          }
+        } catch {
+          clearAuth();
+          sessionStorage.removeItem(SESSION_KEY);
+          setSessionUser(null);
+        }
+      }
+      applyRemoteSettings(res.settings, users);
+      bootstrapped = true;
+    } catch (e) {
+      loadError = e instanceof Error ? e.message : "تعذّر الاتصال بالخادم";
+      bootstrapped = false;
+    } finally {
+      isHydrating = false;
+      emit();
+    }
+  })();
+  return bootPromise;
 }
 
 /* ---------------- Hooks & helpers ---------------- */
@@ -258,44 +333,18 @@ export function useWhatsApp() {
 }
 
 /* ---------------- Auth & Users ---------------- */
-export async function sha256(text: string) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 export const DEFAULT_USERNAME = "admin";
 export const DEFAULT_PASSWORD = "admin123";
+export const SESSION_KEY = "mandoob:admin:session";
 export const SESSION_USER_KEY = "mandoob:admin:user";
-
-function uid() {
-  return `u_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
 
 export function normalizeUsername(v: string) {
   return v.trim().toLowerCase();
 }
 
-/** Ensure at least one admin user exists (migrates legacy passwordHash). */
+/** No-op kept for call-site compatibility — users are seeded on the server. */
 export async function ensureUsersSeeded() {
-  const users = state.admin.users ?? [];
-  if (users.length > 0) return;
-
-  const hash = state.admin.passwordHash || (await sha256(DEFAULT_PASSWORD));
-  const seed: AdminUser = {
-    id: uid(),
-    username: DEFAULT_USERNAME,
-    name: "المدير",
-    role: "admin",
-    passwordHash: hash,
-    active: true,
-    createdAt: new Date().toISOString(),
-  };
-  setSettings((s) => ({
-    ...s,
-    admin: { ...s.admin, users: [seed], passwordHash: "" },
-  }));
+  return;
 }
 
 export function getUsers() {
@@ -307,12 +356,13 @@ export function getUserById(id: string) {
 }
 
 export function getSessionUserId() {
-  return sessionStorage.getItem(SESSION_USER_KEY);
+  return sessionStorage.getItem(SESSION_USER_KEY) || getCachedUser()?.id || null;
 }
 
 export function getSessionUser() {
   const id = getSessionUserId();
-  return id ? getUserById(id) : undefined;
+  if (!id) return undefined;
+  return getUserById(id) || (getCachedUser() ? toAdminUser(getCachedUser()!) : undefined);
 }
 
 export function setSessionUser(user: AdminUser | null) {
@@ -320,25 +370,59 @@ export function setSessionUser(user: AdminUser | null) {
   else sessionStorage.removeItem(SESSION_USER_KEY);
 }
 
-export async function loginUser(username: string, password: string) {
-  await ensureUsersSeeded();
-  const u = normalizeUsername(username);
-  const h = await sha256(password);
-  const user = getUsers().find((x) => x.active && normalizeUsername(x.username) === u && x.passwordHash === h);
-  if (!user) return null;
-  setSessionUser(user);
-  return user;
+export function isLoggedIn() {
+  return !!getToken() && sessionStorage.getItem(SESSION_KEY) === "1";
 }
 
-/** Legacy single-password check — still accepted as admin password if no username match. */
-export async function verifyPassword(input: string) {
-  await ensureUsersSeeded();
-  const h = await sha256(input);
-  const users = getUsers();
-  if (users.some((u) => u.active && u.passwordHash === h)) return true;
-  const stored = state.admin.passwordHash;
-  if (stored) return h === stored;
-  return h === (await sha256(DEFAULT_PASSWORD));
+function setUsersLocal(users: AdminUser[]) {
+  suppressPersist = true;
+  state = {
+    ...state,
+    admin: { ...state.admin, users, passwordHash: "" },
+  };
+  suppressPersist = false;
+  emit();
+}
+
+async function refreshUsers() {
+  if (!getToken()) return;
+  try {
+    const me = await api.me();
+    setAuth(getToken(), me.user);
+    if (me.user.role === "admin") {
+      const listed = await api.listUsers();
+      setUsersLocal(listed.users.map(toAdminUser));
+    } else {
+      setUsersLocal([toAdminUser(me.user)]);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function loginUser(username: string, password: string) {
+  try {
+    const res = await api.login(username, password);
+    setAuth(res.token, res.user);
+    sessionStorage.setItem(SESSION_KEY, "1");
+    const user = toAdminUser(res.user);
+    setSessionUser(user);
+    await refreshUsers();
+    return user;
+  } catch (e) {
+    if (e instanceof Error && (e as Error & { status?: number }).status === 401) return null;
+    throw e;
+  }
+}
+
+export async function logoutUser() {
+  try {
+    await api.logout();
+  } finally {
+    clearAuth();
+    sessionStorage.removeItem(SESSION_KEY);
+    setSessionUser(null);
+  }
 }
 
 export async function createUser(input: {
@@ -347,88 +431,21 @@ export async function createUser(input: {
   role: AdminRole;
   password: string;
 }) {
-  await ensureUsersSeeded();
-  const username = normalizeUsername(input.username);
-  if (!username || username.length < 3) throw new Error("اسم المستخدم يجب أن يكون 3 أحرف على الأقل");
-  if (!/^[a-z0-9._-]+$/.test(username)) throw new Error("اسم المستخدم يقبل حروف إنجليزية وأرقام و . _ - فقط");
-  if (input.password.length < 6) throw new Error("كلمة المرور يجب أن تكون 6 أحرف على الأقل");
-  if (getUsers().some((u) => normalizeUsername(u.username) === username)) throw new Error("اسم المستخدم مستخدم بالفعل");
-
-  const user: AdminUser = {
-    id: uid(),
-    username,
-    name: input.name.trim() || username,
-    role: input.role,
-    passwordHash: await sha256(input.password),
-    active: true,
-    createdAt: new Date().toISOString(),
-  };
-  setSettings((s) => ({
-    ...s,
-    admin: { ...s.admin, users: [...(s.admin.users ?? []), user] },
-  }));
-  return user;
+  const res = await api.createUser(input);
+  await refreshUsers();
+  return toAdminUser(res.user);
 }
 
 export async function updateUser(
   id: string,
   patchData: Partial<Pick<AdminUser, "name" | "role" | "active" | "username">> & { password?: string }
 ) {
-  await ensureUsersSeeded();
-  const users = getUsers();
-  const target = users.find((u) => u.id === id);
-  if (!target) throw new Error("المستخدم غير موجود");
-
-  let username = target.username;
-  if (patchData.username !== undefined) {
-    username = normalizeUsername(patchData.username);
-    if (!username || username.length < 3) throw new Error("اسم المستخدم يجب أن يكون 3 أحرف على الأقل");
-    if (!/^[a-z0-9._-]+$/.test(username)) throw new Error("اسم المستخدم يقبل حروف إنجليزية وأرقام و . _ - فقط");
-    if (users.some((u) => u.id !== id && normalizeUsername(u.username) === username)) {
-      throw new Error("اسم المستخدم مستخدم بالفعل");
-    }
-  }
-
-  if (patchData.password !== undefined && patchData.password.length > 0 && patchData.password.length < 6) {
-    throw new Error("كلمة المرور يجب أن تكون 6 أحرف على الأقل");
-  }
-
-  // Don't deactivate / demote the last active admin
-  const nextRole = patchData.role ?? target.role;
-  const nextActive = patchData.active ?? target.active;
-  const others = users.filter((u) => u.id !== id && u.active && u.role === "admin");
-  if (target.role === "admin" && (nextRole !== "admin" || !nextActive) && others.length === 0) {
-    throw new Error("يجب الإبقاء على مدير نشط واحد على الأقل");
-  }
-
-  const next: AdminUser = {
-    ...target,
-    username,
-    name: patchData.name !== undefined ? patchData.name.trim() || username : target.name,
-    role: nextRole,
-    active: nextActive,
-    passwordHash: patchData.password ? await sha256(patchData.password) : target.passwordHash,
-  };
-
-  setSettings((s) => ({
-    ...s,
-    admin: { ...s.admin, users: (s.admin.users ?? []).map((u) => (u.id === id ? next : u)) },
-  }));
-  return next;
+  const res = await api.updateUser(id, patchData);
+  await refreshUsers();
+  return toAdminUser(res.user);
 }
 
-export function deleteUser(id: string) {
-  const users = getUsers();
-  const target = users.find((u) => u.id === id);
-  if (!target) throw new Error("المستخدم غير موجود");
-  const remainingAdmins = users.filter((u) => u.id !== id && u.active && u.role === "admin");
-  if (target.role === "admin" && remainingAdmins.length === 0) {
-    throw new Error("لا يمكن حذف آخر مدير");
-  }
-  if (getSessionUserId() === id) throw new Error("لا يمكن حذف حسابك الحالي أثناء الجلسة");
-
-  setSettings((s) => ({
-    ...s,
-    admin: { ...s.admin, users: (s.admin.users ?? []).filter((u) => u.id !== id) },
-  }));
+export async function deleteUser(id: string) {
+  await api.deleteUser(id);
+  await refreshUsers();
 }

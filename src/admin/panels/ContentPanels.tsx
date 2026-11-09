@@ -293,6 +293,7 @@ export function SectionsPanel() {
 export function BackupPanel() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const download = () => {
     const blob = new Blob([exportSettings()], { type: "application/json" });
@@ -304,34 +305,55 @@ export function BackupPanel() {
   };
   const onFile = async (f: File | undefined) => {
     if (!f) return;
+    setBusy(true);
     try {
-      importSettings(await f.text());
-      setMsg("✅ تم استيراد الإعدادات بنجاح");
+      await importSettings(await f.text());
+      setMsg("✅ تم استيراد الإعدادات إلى قاعدة البيانات");
     } catch {
-      setMsg("❌ الملف غير صالح");
+      setMsg("❌ الملف غير صالح أو فشل الحفظ على الخادم");
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <div className="space-y-5">
-      <Card title="النسخ الاحتياطي" description="الإعدادات محفوظة في متصفحك الحالي فقط. صدّرها للاحتفاظ بنسخة أو لنقلها إلى جهاز آخر.">
+      <Card
+        title="قاعدة البيانات والنسخ الاحتياطي"
+        description="المحتوى والمستخدمون محفوظون على السيرفر. التصدير اختياري كنسخة احتياطية فقط."
+      >
         <div className="flex flex-wrap gap-3">
-          <Btn variant="primary" onClick={download}>⬇ تصدير الإعدادات (JSON)</Btn>
-          <Btn onClick={() => fileRef.current?.click()}>⬆ استيراد من ملف</Btn>
+          <Btn variant="primary" onClick={download} disabled={busy}>
+            ⬇ تصدير نسخة احتياطية
+          </Btn>
+          <Btn onClick={() => fileRef.current?.click()} disabled={busy}>
+            ⬆ استيراد إلى قاعدة البيانات
+          </Btn>
           <input ref={fileRef} type="file" accept="application/json" hidden onChange={(e) => onFile(e.target.files?.[0])} />
-          <Btn variant="danger" onClick={() => { if (confirm("سيتم حذف كل التعديلات والعودة للإعدادات الافتراضية. متابعة؟")) { resetSettings(); setMsg("↩ تمت الاستعادة للإعدادات الافتراضية"); } }}>
+          <Btn
+            variant="danger"
+            disabled={busy}
+            onClick={() => {
+              if (!confirm("سيتم حذف كل التعديلات والعودة للإعدادات الافتراضية على السيرفر. متابعة؟")) return;
+              setBusy(true);
+              void resetSettings()
+                .then(() => setMsg("↩ تمت الاستعادة للإعدادات الافتراضية"))
+                .catch(() => setMsg("❌ تعذّرت الاستعادة"))
+                .finally(() => setBusy(false));
+            }}
+          >
             استعادة الافتراضي
           </Btn>
         </div>
         {msg && <p className="mt-4 text-sm text-slate-600">{msg}</p>}
       </Card>
 
-      <Card title="الحسابات وكلمات المرور" description="إدارة المستخدمين وكلمات المرور من قسم المستخدمين.">
+      <Card title="الحسابات وكلمات المرور" description="إدارة المستخدمين تتم عبر قاعدة البيانات على السيرفر.">
         <a href="#/admin/users" className="inline-flex h-10 items-center rounded-xl bg-brand-500 px-4 text-sm font-bold text-ink-950 hover:bg-brand-400">
           فتح إدارة المستخدمين ←
         </a>
-        <p className="mt-3 text-[11px] leading-relaxed text-amber-700">
-          ⚠️ الحماية على مستوى المتصفح فقط. لحماية حقيقية اربط اللوحة بمصادقة خلفية.
+        <p className="mt-3 text-[11px] leading-relaxed text-brand-800">
+          تسجيل الدخول محمي من السيرفر، والحسابات تعمل من أي جهاز.
         </p>
       </Card>
     </div>

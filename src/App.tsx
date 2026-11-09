@@ -15,7 +15,9 @@ import { CTA } from "@/components/CTA";
 import { Footer } from "@/components/Footer";
 import { Icons } from "@/components/ui";
 import { AdminApp } from "@/admin/AdminApp";
-import { LoginPage, SESSION_KEY } from "@/admin/LoginPage";
+import { LoginPage } from "@/admin/LoginPage";
+import { SESSION_KEY, isLoggedIn } from "@/store/siteStore";
+import { getToken } from "@/api/client";
 
 function useHashRoute() {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -103,7 +105,7 @@ export default function App() {
   const isAdmin = hash.startsWith("#/admin");
 
   if (isLogin) {
-    if (sessionStorage.getItem(SESSION_KEY) === "1") {
+    if (isLoggedIn() || (getToken() && sessionStorage.getItem(SESSION_KEY) === "1")) {
       location.hash = "#/admin";
       return null;
     }

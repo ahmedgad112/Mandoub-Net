@@ -1,27 +1,15 @@
-import { useEffect, useState, type FormEvent } from "react";
-import {
-  DEFAULT_PASSWORD,
-  DEFAULT_USERNAME,
-  ensureUsersSeeded,
-  loginUser,
-  SESSION_USER_KEY,
-} from "@/store/siteStore";
+import { useState, type FormEvent } from "react";
+import { loginUser, SESSION_KEY } from "@/store/siteStore";
 import { Logo } from "@/components/Navbar";
 import { Icons } from "@/components/ui";
 import { Btn } from "./ui";
 
-const SESSION_KEY = "mandoob:admin:session";
-
 export function LoginPage({ onSuccess }: { onSuccess?: () => void }) {
-  const [username, setUsername] = useState(DEFAULT_USERNAME);
+  const [username, setUsername] = useState("");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    void ensureUsersSeeded();
-  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -31,15 +19,14 @@ export function LoginPage({ onSuccess }: { onSuccess?: () => void }) {
       const user = await loginUser(username, pw);
       setBusy(false);
       if (user) {
-        sessionStorage.setItem(SESSION_KEY, "1");
         if (onSuccess) onSuccess();
         else location.hash = "#/admin";
       } else {
         setErr("اسم المستخدم أو كلمة المرور غير صحيحة.");
       }
-    } catch {
+    } catch (error) {
       setBusy(false);
-      setErr("تعذّر تسجيل الدخول. حاول مرة أخرى.");
+      setErr(error instanceof Error ? error.message : "تعذّر تسجيل الدخول. تأكد أن الخادم يعمل.");
     }
   };
 
@@ -121,13 +108,6 @@ export function LoginPage({ onSuccess }: { onSuccess?: () => void }) {
             {busy ? "جارٍ التحقق…" : "دخول إلى اللوحة"}
           </Btn>
 
-          <div className="mt-5 rounded-2xl bg-slate-50 px-4 py-3 text-center text-[11px] text-slate-500">
-            الحساب الافتراضي:{" "}
-            <span className="ltr font-mono font-semibold text-ink-800">
-              {DEFAULT_USERNAME} / {DEFAULT_PASSWORD}
-            </span>
-          </div>
-
           <a href="#/" className="mt-5 flex items-center justify-center gap-1.5 text-xs font-bold text-brand-700 hover:underline">
             <Icons.ArrowRight className="h-3.5 w-3.5 rotate-180" />
             العودة للموقع
@@ -138,4 +118,4 @@ export function LoginPage({ onSuccess }: { onSuccess?: () => void }) {
   );
 }
 
-export { SESSION_KEY, SESSION_USER_KEY };
+export { SESSION_KEY };
