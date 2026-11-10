@@ -140,7 +140,7 @@ export const defaultSettings: SiteSettings = {
     twitterHandle: "@mandoobnet",
     locale: "ar_SA",
     gaId: "",
-    gtmId: "",
+    gtmId: "GTM-5GP64KZK",
     googleVerification: "",
     schemaEnabled: true,
     faqSchemaEnabled: true,

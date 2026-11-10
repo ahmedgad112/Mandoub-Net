@@ -134,8 +134,11 @@ export function SEOHead() {
         `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','${seo.gaId}');`
       );
     }
-    // Google Tag Manager
-    if (seo.gtmId && !document.getElementById("gtm-init")) {
+    // Google Tag Manager (skip if already injected in index.html)
+    const gtmAlreadyLoaded =
+      !!document.getElementById("gtm-init") ||
+      !!document.querySelector('script[src*="googletagmanager.com/gtm.js"]');
+    if (seo.gtmId && !gtmAlreadyLoaded) {
       upsertScript(
         "gtm-init",
         "text/javascript",
